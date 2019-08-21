@@ -1,0 +1,638 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Cloud Formation Template - CSYE6225 - Creating EC2 instance , Security Groups and Ingress Rules",
+    "Parameters": {
+        "EC2Name": {
+            "Type": "String"
+        },
+        "SubnetId1": {
+            "Type": "String"
+        },
+        "SubnetId2": {
+            "Type": "String"
+        },
+        "SubnetId3": {
+            "Type": "String"
+        },
+        "VpcId": {
+            "Type": "String"
+        },
+        "AMI": {
+            "Type": "String"
+        },
+        "keyName": {
+            "Type": "String"
+        },
+        "AWSRegion": {
+            "Type": "String"
+        },
+        "AWSAccountID": {
+            "Type": "String"
+        },
+        "EC2RoleName": {
+            "Type": "String"
+        },
+        "myBucketName": {
+            "Description": "S3 bucket name",
+            "Type": "String"
+        },
+        "domainname": {
+            "Type": "String"
+        },
+        "CertificateARN": {
+            "Description": "Hosted Zone ID",
+            "Type": "String"
+        }
+    },
+    "Resources": {
+        "ourEC2Instance": {
+            "Type": "AWS::AutoScaling::LaunchConfiguration",
+            "DependsOn": [
+                
+                "WebServerSecurityGroup"
+            ],
+            "Properties": {
+                "LaunchConfigurationName": "asg_launch_config",
+                "InstanceType": "t2.micro",
+                "AssociatePublicIpAddress": true,
+                "ImageId": {
+                    "Ref": "AMI"
+                },
+                "UserData": {
+                    "Fn::Base64": {
+                        "Fn::Join": [
+							"",
+							[
+								"#!/bin/bash -xe \n",
+								"sudo service codedeploy-agent start \n",
+								"sudo service codedeploy-agent status \n",		
+								"sudo echo NODE_ENV=production > /var/.env \n",
+								{
+									"Fn::Join": [
+										"",
+										[
+											"sudo echo Bucket=",
+											{"Ref" : "myBucketName"},
+											" >> /var/.env \n"
+										]
+									]
+								},
+								{
+									"Fn::Join": [
+										"",
+										[
+											"sudo echo DB_HOST=",
+											{
+												"Fn::GetAtt": [
+													"MyRDSDB",
+													"Endpoint.Address"
+												]
+											},
+											" >> /var/.env \n"
+										]
+									]
+								}
+							]
+						]
+                    }
+                },
+                "KeyName": {
+                    "Ref": "keyName"
+                },
+                "SecurityGroups": [
+                    {
+                        "Ref": "WebServerSecurityGroup"
+                    }
+                ],
+                "IamInstanceProfile": {
+                    "Ref": "RootInstanceProfile"
+                }
+            }
+        },
+        "WebServerSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Access to ports 22, 80 & 443",
+                "GroupName": "csye6225-bk",
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "3000",
+                        "ToPort": "3000",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "443",
+                        "ToPort": "443",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ]
+            }
+        },
+        "AWSdynamotable": {
+			"Type" : "AWS::DynamoDB::Table",
+			"Properties" : {
+				
+				"AttributeDefinitions": [
+					{
+						"AttributeName": "id",
+						"AttributeType": "S"
+					}
+				],
+				"TableName":"csye6225",
+				"KeySchema": [
+					{
+						"AttributeName": "id",
+						"KeyType": "HASH"
+					}
+				],
+				"ProvisionedThroughput":{
+					"ReadCapacityUnits" : 2,
+					"WriteCapacityUnits" : 2
+				 },
+				 "TimeToLiveSpecification": {
+					"AttributeName": "id",
+					"Enabled": "TRUE"
+				}	
+			}
+		},
+        "DBEC2SecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "GroupDescription": "Open database for access"
+            }
+        },
+        "DBEC2SecurityGroupIngress": {
+            "Type": "AWS::EC2::SecurityGroupIngress",
+            "Properties": {
+                "GroupId": {
+                    "Ref": "DBEC2SecurityGroup"
+                },
+                "IpProtocol": "tcp",
+                "FromPort": "3306",
+                "ToPort": "3306",
+                "SourceSecurityGroupId": {
+                    "Ref": "WebServerSecurityGroup"
+                }
+            }
+        },
+        "dbSubnetGroup": {
+            "Type": "AWS::RDS::DBSubnetGroup",
+            "Properties": {
+                "DBSubnetGroupDescription": "RDS Subnet Group",
+                "DBSubnetGroupName": "rds12345",
+                "SubnetIds": [
+                    {
+                        "Ref": "SubnetId2"
+                    },
+                    {
+                        "Ref": "SubnetId3"
+                    }
+                ]
+            }
+        },
+        "MyRDSDB": {
+            "Type": "AWS::RDS::DBInstance",
+            "Properties": {
+                "AllocatedStorage": "20",
+                "MultiAZ": "False",
+                "DBInstanceIdentifier" : "csye6225-su19",
+                "DBInstanceClass": "db.t2.medium",
+                "MasterUsername" : "csye6225master",
+				"MasterUserPassword" : "csye6225password",
+                "Engine": "MySQL",
+                "DBName": "csye6225",
+                "Port":"3306",
+                "DBSubnetGroupName": {
+                    "Ref": "dbSubnetGroup"
+                },
+                "StorageType" : "gp2",
+                "PubliclyAccessible": true,
+                "VPCSecurityGroups": [
+                    {
+                        "Fn::GetAtt": [
+                            "DBEC2SecurityGroup",
+                            "GroupId"
+                        ]
+                    }
+                ]
+            }
+        },
+        "CodeDeployServiceRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
+                ],
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": "sts:AssumeRole",
+                            "Principal": {
+                                "Service": "codedeploy.amazonaws.com"
+                            },
+                            "Effect": "Allow"
+                        }
+                    ]
+                },
+                "RoleName": "CodeDeploySerivceRole"
+            }
+        },
+        "CodeDeployApplication": {
+            "Type": "AWS::CodeDeploy::Application",
+            "Properties": {
+                "ApplicationName": "csye6225-webapp",
+                "ComputePlatform": "Server"
+            }
+        },
+        "CodeDeploymentGroup": {
+            "DependsOn": [
+                "CodeDeployApplication",
+                "myTargetGroup",
+                "myAutoScalingGroup"
+            ],
+            "Type": "AWS::CodeDeploy::DeploymentGroup",
+            "Properties": {
+                "ApplicationName": "csye6225-webapp",
+                "AutoScalingGroups": [
+                    {
+                        "Ref": "myAutoScalingGroup"
+                    }
+                ],
+                "AutoRollbackConfiguration": {
+                    "Enabled": "true",
+                    "Events": [
+                        "DEPLOYMENT_FAILURE"
+                    ]
+                },
+                "DeploymentConfigName": "CodeDeployDefault.AllAtOnce",
+                "DeploymentGroupName": "csye6225-webapp-deployment",
+                "DeploymentStyle": {
+                    "DeploymentType": "IN_PLACE",
+                    "DeploymentOption": "WITHOUT_TRAFFIC_CONTROL"
+                },
+                "LoadBalancerInfo": {
+                    "TargetGroupInfoList": [
+                        {
+                            "Name": {
+                                "Fn::GetAtt": [
+                                    "myTargetGroup",
+                                    "TargetGroupName"
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "Ec2TagFilters": [
+                    {
+                        "Type": "KEY_AND_VALUE",
+                        "Key": "Name",
+                        "Value": "prod-ec2"
+                    }
+                ],
+                "ServiceRoleArn": {
+                    "Fn::GetAtt": [
+                        "CodeDeployServiceRole",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+        "RootInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "EC2RoleName"
+                    }
+                ]
+            }
+        },
+        "ourIAMInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "CodeDeployServiceRole"
+                    }
+                ]
+            }
+        },
+        "CloudWatchAgentServerRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "CloudWatchAgentServerRole",
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+                    "arn:aws:iam::aws:policy/CloudWatchAgentAdminPolicy"
+                ]
+            }
+        },
+        "myLoadBalancer": {
+            "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+            "DependsOn": [
+                "loadbalancersecuritygroup"
+            ],
+            "Properties": {
+                "Subnets": [
+                    {
+                        "Ref": "SubnetId1"
+                    },
+                    {
+                        "Ref": "SubnetId2"
+                    }
+                ],
+                "SecurityGroups": [
+                    {
+                        "Ref": "loadbalancersecuritygroup"
+                    }
+                ],
+                "Scheme": "internet-facing",
+                "LoadBalancerAttributes": [
+                    {
+                        "Key": "idle_timeout.timeout_seconds",
+                        "Value": "300"
+                    }
+                ],
+                "Name": "myloadbalancer"
+            }
+        },
+        "myAutoScalingGroup": {
+            "Type": "AWS::AutoScaling::AutoScalingGroup",
+            "DependsOn": [
+                "myListener",
+                "myTargetGroup",
+                "ourEC2Instance"
+            ],
+            "Properties": {
+                "VPCZoneIdentifier": [
+                    {
+                        "Ref": "SubnetId1"
+                    },
+                    {
+                        "Ref": "SubnetId2"
+                    }
+                ],
+                "LaunchConfigurationName": {
+                    "Ref": "ourEC2Instance"
+                },
+                "MinSize": "3",
+                "MaxSize": "7",
+                "Cooldown": "60",
+                "DesiredCapacity": "3",
+                "TargetGroupARNs": [
+                    {
+                        "Ref": "myTargetGroup"
+                    }
+                ],
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": "prod-ec2",
+                        "PropagateAtLaunch": "true"
+                    }
+                ],
+                "AutoScalingGroupName": "myAutoScalingGroup"
+            }
+        },
+        "WebServerScaleUpPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {
+                    "Ref": "myAutoScalingGroup"
+                },
+                "Cooldown": "60",
+                "ScalingAdjustment": "1"
+            }
+        },
+        "WebServerScaleDownPolicy": {
+            "Type": "AWS::AutoScaling::ScalingPolicy",
+            "Properties": {
+                "AdjustmentType": "ChangeInCapacity",
+                "AutoScalingGroupName": {
+                    "Ref": "myAutoScalingGroup"
+                },
+                "Cooldown": "60",
+                "ScalingAdjustment": "-1"
+            }
+        },
+        "CPUAlarmHigh": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-up if CPU > 5% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Average",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "5",
+                "AlarmActions": [
+                    {
+                        "Ref": "WebServerScaleUpPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "myAutoScalingGroup"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanThreshold"
+            }
+        },
+        "CPUAlarmLow": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmDescription": "Scale-down if CPU < 3% for 10 minutes",
+                "MetricName": "CPUUtilization",
+                "Namespace": "AWS/EC2",
+                "Statistic": "Average",
+                "Period": "300",
+                "EvaluationPeriods": "2",
+                "Threshold": "3",
+                "AlarmActions": [
+                    {
+                        "Ref": "WebServerScaleDownPolicy"
+                    }
+                ],
+                "Dimensions": [
+                    {
+                        "Name": "AutoScalingGroupName",
+                        "Value": {
+                            "Ref": "myAutoScalingGroup"
+                        }
+                    }
+                ],
+                "ComparisonOperator": "LessThanThreshold"
+            }
+        },
+        "myListener": {
+            "Type": "AWS::ElasticLoadBalancingV2::Listener",
+            "DependsOn": [
+                "myTargetGroup",
+                "myLoadBalancer"
+            ],
+            "Properties": {
+                "Certificates": [
+                    {
+                        "CertificateArn": {
+                            "Ref": "CertificateARN"
+                        }
+                    }
+                ],
+                "DefaultActions": [
+                    {
+                        "Type": "forward",
+                        "TargetGroupArn": {
+                            "Ref": "myTargetGroup"
+                        }
+                    }
+                ],
+                "LoadBalancerArn": {
+                    "Ref": "myLoadBalancer"
+                },
+                "Port": "443",
+                "Protocol": "HTTPS"
+            }
+        },
+        "myTargetGroup": {
+            "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+            "DependsOn": "myLoadBalancer",
+            "Properties": {
+                "HealthCheckPath": "/",
+                "Matcher": {
+                    "HttpCode": "200,302,401,400"
+                },
+                "HealthCheckIntervalSeconds": 60,
+                "HealthCheckTimeoutSeconds": 59,
+                "HealthyThresholdCount": 3,
+                "Port": "3000",
+                "Protocol": "HTTP",
+                "UnhealthyThresholdCount": 5,
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "Name": "myTargetGroup"
+            }
+        },
+        "loadbalancersecuritygroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupName": "LoadBalancer-Security-Group",
+                "GroupDescription": "Enable HTTPS via port 3000",
+                "VpcId": {
+                    "Ref": "VpcId"
+                },
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 443,
+                        "ToPort": 443,
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": 80,
+                        "ToPort": 80,
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ],
+                "SecurityGroupEgress":[
+                {
+                    "IpProtocol":"tcp",
+                    "FromPort":3000,
+                    "ToPort":3000,
+                    "DestinationSecurityGroupId":{
+                        "Fn::GetAtt":["WebServerSecurityGroup","GroupId"]
+                    }
+                }
+                ]
+            }
+        },
+        "myRecordSet": {
+            "Type": "AWS::Route53::RecordSet",
+            "DependsOn": "myLoadBalancer",
+            "Properties": {
+                "AliasTarget": {
+                    "DNSName": {
+                        "Fn::GetAtt": [
+                            "myLoadBalancer",
+                            "DNSName"
+                        ]
+                    },
+                    "HostedZoneId": {
+                        "Fn::GetAtt": [
+                            "myLoadBalancer",
+                            "CanonicalHostedZoneID"
+                        ]
+                    },
+                    "EvaluateTargetHealth": true
+                },
+                "Name": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            {
+                                "Ref": "domainname"
+                            },
+                            "."
+                        ]
+                    ]
+                },
+                "HostedZoneName": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            {
+                                "Ref": "domainname"
+                            },
+                            "."
+                        ]
+                    ]
+                },
+                "Type": "A"
+            }
+        }
+    }
+}
